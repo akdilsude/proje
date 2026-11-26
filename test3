@@ -1,0 +1,126 @@
+#include <Arduino.h>
+
+
+// KALIBRASYON KATSAYISI
+// 1. Ilk yuklemede 1.0f birak.
+// 2. Agirligini bildigin cismi koy, ekrandaki "Ham Fark" sayisini oku.
+// 3. Hesapla: KALIBRASYON_KATSAYISI = Ham_Fark / Bilinen_Agirlik_Gram
+//    (Ham Fark eksi cikarsa eksi isaretini koruyarak yaz, or: -421.5f)
+// 4. Buldugun sayiyi buraya yazip tekrar yukle ve gram degerini dogrula.
+
+const float KALIBRASYON_KATSAYISI = 1.0f;
+
+#define HX_DT_PIN   PB6
+#define HX_SCK_PIN  PB7
+
+#define M1_IN1      PB10
+#define M1_IN2      PB11
+#define M2_IN3      PB12
+#define M2_IN4      PB13
+#define EN_PIN      PB5
+
+long daraDegeri = 0;
+
+bool hx711TekOku(int32_t &sonuc)
+{
+    unsigned long baslangic = millis();
+    while (digitalRead(HX_DT_PIN) == HIGH)
+    {
+        if (millis() - baslangic > 500)
+            return false
+    }
+
+    uint32_t ham = 0;
+    for (int i = 0; i < 24; i++)
+    {
+        digitalWrite(HX_SCK_PIN, HIGH);
+        delayMicroseconds(2);
+        ham = (ham << 1) | (digitalRead(HX_DT_PIN) ? 1UL : 0UL);
+        digitalWrite(HX_SCK_PIN, LOW);
+        delayMicroseconds(2);
+    }
+
+    digitalWrite(HX_SCK_PIN, HIGH);
+    delayMicroseconds(2);
+    digitalWrite(HX_SCK_PIN, LOW);
+    delayMicroseconds(2);
+
+    // 24-bit isaretli sayiyi 32-bit'e genislet
+    if (ham & 0x800000UL)
+        ham |= 0xFF000000UL;
+
+    sonuc = (int32_t)ham;
+    return true;
+}
+
+bool hx711OrtalamaOku(int ornekSayisi, long &ortalama)
+{
+    int64_t toplam = 0;
+    for (int i = 0; i < ornekSayisi; i++)
+    {
+        int32_t deger = 0;
+        if (!hx711TekOku(deger))
+            return false;
+        toplam += deger;
+    }
+    ortalama = (long)(toplam / ornekSayisi);
+    return true;
+}
+
+void setup()
+{
+    // Bant ve step motorlari kapali tut
+    pinMode(M1_IN1, OUTPUT); digitalWrite(M1_IN1, LOW);
+    pinMode(M1_IN2, OUTPUT); digitalWrite(M1_IN2, LOW);
+    pinMode(M2_IN3, OUTPUT); digitalWrite(M2_IN3, LOW);
+    pinMode(M2_IN4, OUTPUT); digitalWrite(M2_IN4, LOW);
+    pinMode(EN_PIN, OUTPUT); digitalWrite(EN_PIN, HIGH);
+
+    pinMode(HX_DT_PIN, INPUT);
+    pinMode(HX_SCK_PIN, OUTPUT);
+    digitalWrite(HX_SCK_PIN, LOW);
+
+    Serial.begin(115200);
+    delay(2000);
+
+    Serial.println("==================================================");
+    Serial.println("TEST 3: HX711 TARTI KALIBRASYONU");
+    Serial.println("Tarti plakasini BOS birak, 2 sn icinde dara aliniyor...");
+    Serial.println("==================================================");
+    delay(2000);
+
+    // Ilk birkac okumayi at
+    long bosOku = 0;
+    hx711OrtalamaOku(3, bosOku);
+
+    if (hx711OrtalamaOku(15, daraDegeri))
+    {
+        Serial.print(">>> DARA ALINDI (Sifir Ham Deger): ");
+        Serial.println(daraDegeri);
+        Serial.println("Simdi agirligini bildigin cismi plakanin ortasina koy.");
+    }
+    else
+    {
+        Serial.println("!!! HATA: HX711 yanit vermiyor! (PB6/PB7 ve 3.3V kontrol et)");
+    }
+}
+
+void loop()
+{
+    long anlikHam = 0;
+    if (!hx711OrtalamaOku(5, anlikHam))
+    {
+        Serial.println("!!! HATA: HX711 okuma zaman asimi (baglanti kopuk)!");
+        delay(500);
+        return;
+    }
+
+    long hamFark = anlikHam - daraDegeri;
+    float gram   = (float)hamFark / KALIBRASYON_KATSAYISI;
+
+    Serial.print("Ham Fark: ");
+    Serial.print(hamFark);
+    Serial.print("  |  Agirlik: ");
+    Serial.print(gram, 1);
+    Serial.println(" g");
+}
