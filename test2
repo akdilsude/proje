@@ -1,0 +1,251 @@
+#include <Arduino.h>
+#include <Servo.h>
+
+const int TEST_MODU = 3;
+
+
+const int SERVO1_YUKARI  = 45;
+const int SERVO1_ASAGI   = 135;
+
+const int SERVO2_BEKLEME = 90; 
+const int SERVO2_ATIM    = 120;
+
+const bool HOMING_YON_TERS    = false;
+const int  ADIM_BEKLEME_US    = 500;
+const long MAX_HOMING_ADIM    = 40000;
+
+
+const long TARTI_ADIM         = 9500; 
+const long GERI_CEKME_ADIM    = 800; 
+const long BANT2_AKTARIM_ADIM = TARTI_ADIM + 6500 + 3750;
+
+#define M1_IN1          PB10
+#define M1_IN2          PB11
+#define M2_IN3          PB12
+#define M2_IN4          PB13
+
+#define STEP_PIN        PB0
+#define DIR_PIN         PB1
+#define EN_PIN          PB5
+#define SERVO1_PIN      PA6
+#define SERVO2_PIN      PA7
+#define SWITCH_PIN      PA8
+
+const int SWITCH_BASILI = LOW;
+
+Servo servo1;
+Servo servo2;
+long mevcutAdim = 0;
+
+bool switchBasiliMi()
+{
+    return (digitalRead(SWITCH_PIN) == SWITCH_BASILI);
+}
+
+void stepMotorAktif(bool aktif)
+{
+    digitalWrite(EN_PIN, aktif ? LOW : HIGH);
+}
+
+void tekAdimAt()
+{
+    digitalWrite(STEP_PIN, HIGH);
+    delayMicroseconds(ADIM_BEKLEME_US);
+    digitalWrite(STEP_PIN, LOW);
+    delayMicroseconds(ADIM_BEKLEME_US);
+}
+
+void geriSayim(int saniye)
+{
+    for (int i = saniye; i > 0; i--)
+    {
+        Serial.print("Baslamasina ");
+        Serial.print(i);
+        Serial.println(" sn... (Ters giderse parmaginla switch'e bas!)");
+        delay(1000);
+    }
+}
+
+bool guvenliHoming()
+{
+    Serial.println(">>> HOMING BASLIYOR...");
+    stepMotorAktif(true);
+    delay(20);
+
+    digitalWrite(DIR_PIN, HOMING_YON_TERS ? HIGH : LOW);
+
+    long atilanAdim = 0;
+    while (!switchBasiliMi())
+    {
+        tekAdimAt();
+        atilanAdim++;
+
+        if (atilanAdim >= MAX_HOMING_ADIM)
+        {
+            Serial.println("!!! HATA: MAX_HOMING_ADIM asildi, switch bulunamadi! Motor kapatildi.");
+            stepMotorAktif(false);
+            return false;
+        }
+    }
+
+    mevcutAdim = 0;
+    Serial.print(">>> HOMING TAMAM! ");
+    Serial.print(atilanAdim);
+    Serial.println(" adimda sifirlandi (Konum = 0).");
+    return true;
+}
+
+void stepKonumaGit(long hedefAdim)
+{
+    if (hedefAdim < 0)
+        hedefAdim = 0;
+
+    long fark = hedefAdim - mevcutAdim;
+    if (fark == 0)
+        return;
+
+    stepMotorAktif(true);
+    delay(10);
+
+    bool ileriMi   = (fark > 0);
+    long toplam    = ileriMi ? fark : -fark;
+    bool dirSeviye = ileriMi ? !HOMING_YON_TERS : HOMING_YON_TERS;
+    digitalWrite(DIR_PIN, dirSeviye ? HIGH : LOW);
+
+    for (long i = 0; i < toplam; i++)
+    {
+        if (!ileriMi && switchBasiliMi())
+        {
+            mevcutAdim = 0;
+            Serial.println(">>> LIMIT SWITCH TETIKLENDI! Konum = 0.");
+            return;
+        }
+
+        tekAdimAt();
+        mevcutAdim += (ileriMi ? 1 : -1);
+    }
+
+    Serial.print(">>> Step Konum: ");
+    Serial.print(mevcutAdim);
+    Serial.println(" adim");
+}
+
+void mod3TamProva()
+{
+    Serial.println("=== MOD 3: TAM KALIBRASYON PROVASI ===");
+    servo1.write(SERVO1_YUKARI);
+    servo2.write(SERVO2_BEKLEME);
+    delay(500);
+
+    geriSayim(3);
+
+    // 1. Sifirlama
+    if (!guvenliHoming())
+        return;
+
+    Serial.println("[1/6] Sifir noktasinda 3 sn bekleniyor (kutuyu yerlestirebilirsin)...");
+    delay(3000);
+
+    // 2. Servo 1 asagi
+    Serial.print("[2/6] Servo 1 ASAGI iniyor -> ");
+    Serial.println(SERVO1_ASAGI);
+    servo1.write(SERVO1_ASAGI);
+    delay(1000);
+
+    // 3. Tartiya git
+    Serial.print("[3/6] Tartiya gidiliyor -> Hedef: ");
+    Serial.println(TARTI_ADIM);
+    stepKonumaGit(TARTI_ADIM);
+    Serial.println("      Tarti ortasinda mi kontrol et (3 sn bekleniyor)...");
+    delay(3000);
+
+    // 4. Temassiz tartim icin geri cekil
+    long geriKonum = TARTI_ADIM - GERI_CEKME_ADIM;
+    if (geriKonum < 0) geriKonum = 0;
+    Serial.print("[4/6] Tartim icin geri cekiliyor -> Hedef: ");
+    Serial.println(geriKonum);
+    stepKonumaGit(geriKonum);
+    Serial.println("      Kol kutudan ayrildi mi kontrol et (3 sn bekleniyor)...");
+    delay(3000);
+
+    // 5. 2. Banda aktar
+    Serial.print("[5/6] 2. Banda aktariliyor -> Hedef: ");
+    Serial.println(BANT2_AKTARIM_ADIM);
+    stepKonumaGit(BANT2_AKTARIM_ADIM);
+    Serial.println("      Kutu 2. banda gecti mi kontrol et (3 sn bekleniyor)...");
+    delay(3000);
+
+    // 6. Servo 1 yukari ve eve donus
+    Serial.print("[6/6] Servo 1 YUKARI kalkiyor -> ");
+    Serial.println(SERVO1_YUKARI);
+    servo1.write(SERVO1_YUKARI);
+    delay(1000);
+
+    guvenliHoming();
+    stepMotorAktif(false);
+    Serial.println("=== PROVA BITTI (Motor serbest). Tekrar icin STM32 RESET tusuna bas. ===");
+}
+
+void setup()
+{
+    // Bant motorlarini kapali tut
+    pinMode(M1_IN1, OUTPUT); digitalWrite(M1_IN1, LOW);
+    pinMode(M1_IN2, OUTPUT); digitalWrite(M1_IN2, LOW);
+    pinMode(M2_IN3, OUTPUT); digitalWrite(M2_IN3, LOW);
+    pinMode(M2_IN4, OUTPUT); digitalWrite(M2_IN4, LOW);
+
+    pinMode(STEP_PIN, OUTPUT);
+    pinMode(DIR_PIN, OUTPUT);
+    pinMode(EN_PIN, OUTPUT);
+    pinMode(SWITCH_PIN, INPUT);
+
+    digitalWrite(STEP_PIN, LOW);
+    stepMotorAktif(false);
+
+    servo1.attach(SERVO1_PIN);
+    servo2.attach(SERVO2_PIN);
+    servo1.write(SERVO1_YUKARI);
+    servo2.write(SERVO2_BEKLEME);
+
+    Serial.begin(115200);
+    delay(2000);
+
+    if (TEST_MODU == 1)
+    {
+        Serial.println("=== MOD 1: SERVO ACI TESTI (Step motor kapali) ===");
+    }
+    else if (TEST_MODU == 2)
+    {
+        Serial.println("=== MOD 2: HOMING (YON VE SWITCH) TESTI ===");
+        geriSayim(3);
+        guvenliHoming();
+        stepMotorAktif(false);
+        Serial.println("=== MOD 2 BITTI (Motor serbest). Tekrar icin STM32 RESET tusuna bas. ===");
+    }
+    else if (TEST_MODU == 3)
+    {
+        mod3TamProva();
+    }
+}
+
+void loop()
+{
+    if (TEST_MODU == 1)
+    {
+        Serial.print("Servo 1 -> YUKARI ("); Serial.print(SERVO1_YUKARI); Serial.println(")");
+        servo1.write(SERVO1_YUKARI);
+        delay(2500);
+
+        Serial.print("Servo 1 -> ASAGI  ("); Serial.print(SERVO1_ASAGI); Serial.println(")");
+        servo1.write(SERVO1_ASAGI);
+        delay(2500);
+
+        Serial.print("Servo 2 -> BEKLEME ("); Serial.print(SERVO2_BEKLEME); Serial.println(")");
+        servo2.write(SERVO2_BEKLEME);
+        delay(2500);
+
+        Serial.print("Servo 2 -> ATIM    ("); Serial.print(SERVO2_ATIM); Serial.println(")");
+        servo2.write(SERVO2_ATIM);
+        delay(2500);
+    }
+}
