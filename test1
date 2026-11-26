@@ -1,0 +1,209 @@
+/*
+Limit Switch
+HC-SR04
+LM2596 5V ayarlı
+L298N
+*/
+
+/*
+Limit Switch -> 
+
+KIRMIZI + ŞERİDİ 5V YAP.
+
+
+12 V Adaptör (+): L298N'in 12V klemensine ve LM2596 IN+ girişine gider.
+12 V Adaptör (- / GND): Breadboard'daki Ortak GND hattına bağlanır.
+
+LM2596 (5,0 V regülatör):   IN+ → 12 V hattına
+IN- → Ortak GND hattına
+OUT- → Ortak GND hattına
+OUT+ → (Sensörü bağlamadan önce multimetre ile tam 5,0 V ölçüp ayarla) → Breadboard'daki 5,0 V şeridine.
+STM32'nin herhangi bir G (GND) pinini mutlaka breadboard'daki Ortak GND hattına bağla.
+Kırmızı (+) şeridine (5,0 V): LM2596'nın OUT+ ucundan bir kablo takarsın. Artık o kırmızı sıradaki tüm deliklerde 5,0 V vardır. HC-SR04'ün VCC kablosunu da aynı kırmızı sıranın herhangi bir deliğine takarsın.
+
+Mavi (-) şeridine (Ortak GND): Bütün eksi/toprak kablolarını aynı mavi sıranın yan yana deliklerine toplarsın:
+
+12 V adaptörün - (GND) ucu
+
+LM2596'nın IN- ve OUT- uçları
+
+L298N'in GND ucu
+
+STM32'nin herhangi bir G (GND) pini
+
+HC-SR04'ün GND pini
+
+Limit Switch'in GND pini
+
+Gerilim bölücüdeki 2 kΩ direncin alt bacağı
+
+şu anda direkt LM2596 nın out+ çıkışını hcsr04 ün vcc sine bağlayabilirsin.
+
+*/
+
+
+
+/*   AMAÇ:
+1. Limit switch'in basılıyken 0 mı 1 mi verdiğini kesinleştirmek.
+2. HC-SR04'ün bant boşken ve kutu önündeyken tam olarak kaç cm okuduğunu görmek.
+3. İki DC motorun doğru yöne dönüp dönmediğini ve 1/2 kanallarının karışıp karışmadığını doğrulamak.
+4. DC motorlar 12 V ile dönerken sensörlerin parazitten (gürültüden) sapıtıp sapıtmadığını canlı yakalamak.
+*/
+#include <Arduino.h>
+
+#define M1_IN1      PB10
+#define M1_IN2      PB11
+#define M2_IN3      PB12
+#define M2_IN4      PB13
+
+#define T_BANT1_POZISYON_MS 
+#define TRIG_PIN    PB8
+#define ECHO_PIN    PB9
+#define SWITCH_PIN  PA8
+
+const bool BANT1_TERS = false;
+const bool BANT2_TERS = true;
+
+bool bant1Acik = false;
+bool bant2Acik = false;
+unsigned long sonEkranZamani = 0;
+
+void bant1Ayarla(bool acik)
+{
+    bant1Acik = acik;
+    if (!acik)
+    {
+        digitalWrite(M1_IN1, LOW);
+        digitalWrite(M1_IN2, LOW);
+        return;
+    }
+    digitalWrite(M1_IN1, BANT1_TERS ? LOW  : HIGH);
+    digitalWrite(M1_IN2, BANT1_TERS ? HIGH : LOW);
+}
+
+void bant2Ayarla(bool acik)
+{
+    bant2Acik = acik;
+    if (!acik)
+    {
+        digitalWrite(M2_IN3, LOW);
+        digitalWrite(M2_IN4, LOW);
+        return;
+    }
+    digitalWrite(M2_IN3, BANT2_TERS ? LOW  : HIGH);
+    digitalWrite(M2_IN4, BANT2_TERS ? HIGH : LOW);
+}
+
+float mesafeOkuCm()
+{
+    digitalWrite(TRIG_PIN, LOW);
+    delayMicroseconds(5);
+    digitalWrite(TRIG_PIN, HIGH);
+    delayMicroseconds(20);
+    digitalWrite(TRIG_PIN, LOW);
+
+    unsigned long t0 = micros();
+    while (digitalRead(ECHO_PIN) == LOW)
+    {
+        if (micros() - t0 > 30000UL)
+            return -1.0f;
+    }
+
+    unsigned long basla = micros();
+    while (digitalRead(ECHO_PIN) == HIGH)
+    {
+        if (micros() - basla > 35000UL)
+            return -1.0f;
+    }
+
+    unsigned long sureUs = micros() - basla;
+    return (sureUs * 0.0343f) / 2.0f;
+}
+
+void setup()
+{
+    pinMode(M1_IN1, OUTPUT);
+    pinMode(M1_IN2, OUTPUT);
+    pinMode(M2_IN3, OUTPUT);
+    pinMode(M2_IN4, OUTPUT);
+    bant1Ayarla(true);
+    bant2Ayarla(true);
+
+    pinMode(SWITCH_PIN, INPUT);
+    pinMode(TRIG_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
+    digitalWrite(TRIG_PIN, LOW);
+
+    Serial.begin(115200);
+    delay(1000);
+    Serial.println("TEST 1 HAZIR -> [1] Bant1 | [2] Bant2 | [3] Ikisini Ac | [0] Ikisini Kapat");
+}
+
+void loop()
+{
+    if (Serial.available() > 0)
+    {
+        char cmd = Serial.read();
+
+        if (cmd == '1')
+        {
+            bant1Ayarla(!bant1Acik);
+            Serial.println(bant1Acik ? ">>> BANT 1: ACIK" : ">>> BANT 1: KAPALI");
+        }
+        else if (cmd == '2')
+        {
+            bant2Ayarla(!bant2Acik);
+            Serial.println(bant2Acik ? ">>> BANT 2: ACIK" : ">>> BANT 2: KAPALI");
+        }
+        else if (cmd == '3')
+        {
+            bant1Ayarla(true);
+            bant2Ayarla(true);
+            Serial.println(">>> BANT 1 + BANT 2: ACIK");
+        }
+        else if (cmd == '0')
+        {
+            bant1Ayarla(false);
+            bant2Ayarla(false);
+            Serial.println(">>> TUM BANTLAR: KAPALI");
+        }
+    }
+
+    if (millis() - sonEkranZamani >= 300)
+    {
+        sonEkranZamani = millis();
+        int sw = digitalRead(SWITCH_PIN);
+        float mesafe = mesafeOkuCm();
+
+        Serial.print("SW: ");
+        Serial.print(sw);
+        Serial.print(" | Mesafe: ");
+        if (mesafe < 0)
+            Serial.println("TIMEOUT");
+        else
+        {
+            Serial.print(mesafe, 1);
+            Serial.println(" cm");
+        }
+    }
+}
+/*
+1. Switch kararlılığı: Switch'e basılı değilken ekrandaki SW: değeri
+sabit mi duruyor, yoksa 0 ve 1 arasında kendi kendine titriyor mu? Bastığında
+tam tersi değere net geçiyor mu?
+
+2. HC-SR04 boş ve dolu farkı:
+Bant tamamen boşken sensör kaç cm okuyor?
+(Karşıda bir engel/duvar ya da bandın kendi çerçevesi sensörü yanıltıyor mu?)
+Kutuyu 1. bandın üstüne koyduğunda kaç cm okuyor? Kutuyu sensörün önünde
+sağa-sola hafifçe oynattığında mesafe hangi aralıkta geziyor?
+
+3. Motor yönleri
+
+4. Motor açıkken parazit testi
+3 yazıp iki bandı birden çalıştırdığında ekrandaki SW: ve Mesafe: değerlerine dikkatle bak.
+Motorlar yokken düzgün okuyan HC-SR04 motorlar açılınca aniden TIMEOUT veya 2.1 cm gibi saçma değerler vermeye başlarsa, ya da STM32 kendini resetleyip tekrar TEST 1 HAZIR yazarsa, donanımda voltaj düşümü / topraklama (EMI) paraziti var demektir.
+
+
+2-12 cm
+*/
